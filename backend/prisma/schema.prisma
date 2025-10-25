@@ -1,0 +1,625 @@
+// Project Nexus - Database Schema
+// PostgreSQL with Prisma ORM
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// AUTHENTICATION & USERS
+// ============================================
+
+model User {
+  id            String   @id @default(uuid())
+  email         String   @unique
+  passwordHash  String?  // Nullable for OAuth-only users
+  firstName     String
+  lastName      String
+  avatarUrl     String?
+  
+  // OAuth
+  googleId      String?  @unique
+  githubId      String?  @unique
+  
+  // Status
+  isEmailVerified Boolean @default(false)
+  isActive        Boolean @default(true)
+  
+  // Timestamps
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  lastLoginAt   DateTime?
+  
+  // Relations
+  workspaceMembers    WorkspaceMember[]
+  projectMembers      ProjectMember[]
+  createdTasks        Task[]               @relation("TaskCreator")
+  assignedTasks       TaskAssignee[]
+  comments            TaskComment[]
+  reviews             Review[]
+  feedbackGiven       Feedback[]           @relation("FeedbackAuthor")
+  feedbackReceived    Feedback[]           @relation("FeedbackRecipient")
+  createdProjects     Project[]            @relation("ProjectCreator")
+  createdWorkspaces   Workspace[]          @relation("WorkspaceCreator")
+  calendarEvents      CalendarEvent[]
+  refreshTokens       RefreshToken[]
+  notifications       Notification[]
+  
+  @@index([email])
+  @@index([googleId])
+  @@index([githubId])
+  @@map("users")
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  token     String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  
+  @@index([userId])
+  @@index([token])
+  @@map("refresh_tokens")
+}
+
+// ============================================
+// WORKSPACES (Multi-Tenancy)
+// ============================================
+
+enum WorkspaceRole {
+  ADMIN   // Full control: billing, users, projects
+  MEMBER  // Can create/edit tasks and projects
+  GUEST   // View-only access
+}
+
+model Workspace {
+  id          String   @id @default(uuid())
+  name        String
+  slug        String   @unique
+  description String?
+  logoUrl     String?
+  
+  // Owner
+  createdById String
+  createdBy   User     @relation("WorkspaceCreator", fields: [createdById], references: [id])
+  
+  // Settings
+  isActive    Boolean  @default(true)
+  
+  // Timestamps
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  // Relations
+  members     WorkspaceMember[]
+  projects    Project[]
+  calendarEvents CalendarEvent[]
+  
+  @@index([slug])
+  @@index([createdById])
+  @@map("workspaces")
+}
+
+model WorkspaceMember {
+  id          String        @id @default(uuid())
+  workspaceId String
+  workspace   Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role        WorkspaceRole @default(MEMBER)
+  
+  // Timestamps
+  joinedAt    DateTime      @default(now())
+  
+  @@unique([workspaceId, userId])
+  @@index([workspaceId])
+  @@index([userId])
+  @@map("workspace_members")
+}
+
+// ============================================
+// PROJECTS
+// ============================================
+
+model Project {
+  id          String   @id @default(uuid())
+  name        String
+  description String?
+  key         String   // Short key like "PROJ"
+  color       String?  // Hex color for UI
+  
+  // Workspace
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  
+  // Creator
+  createdById String
+  createdBy   User     @relation("ProjectCreator", fields: [createdById], references: [id])
+  
+  // Status
+  isActive    Boolean  @default(true)
+  isArchived  Boolean  @default(false)
+  
+  // Timestamps
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  // Relations
+  members     ProjectMember[]
+  tasks       Task[]
+  boards      Board[]
+  reports     Report[]
+  githubIntegrations GitHubIntegration[]
+  
+  @@unique([workspaceId, key])
+  @@index([workspaceId])
+  @@index([createdById])
+  @@map("projects")
+}
+
+model ProjectMember {
+  id        String   @id @default(uuid())
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  isMentor  Boolean  @default(false) // Special role for feedback
+  
+  // Timestamps
+  joinedAt  DateTime @default(now())
+  
+  @@unique([projectId, userId])
+  @@index([projectId])
+  @@index([userId])
+  @@map("project_members")
+}
+
+// ============================================
+// TASK BOARDS & TASKS
+// ============================================
+
+model Board {
+  id        String   @id @default(uuid())
+  name      String
+  position  Int      // For ordering boards
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  
+  // Timestamps
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  // Relations
+  columns   BoardColumn[]
+  
+  @@index([projectId])
+  @@map("boards")
+}
+
+model BoardColumn {
+  id        String   @id @default(uuid())
+  name      String   // "To Do", "In Progress", "Review", "Done"
+  position  Int      // For ordering columns
+  boardId   String
+  board     Board    @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  
+  // WIP limits
+  wipLimit  Int?     // Optional work-in-progress limit
+  
+  // Timestamps
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  // Relations
+  tasks     Task[]
+  
+  @@index([boardId])
+  @@map("board_columns")
+}
+
+enum TaskPriority {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  REVIEW
+  DONE
+  BLOCKED
+}
+
+model Task {
+  id          String       @id @default(uuid())
+  title       String
+  description String?      @db.Text // Markdown supported
+  key         String       // Like "PROJ-123"
+  
+  // Project
+  projectId   String
+  project     Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  
+  // Board position
+  columnId    String
+  column      BoardColumn  @relation(fields: [columnId], references: [id])
+  position    Int          // Position within column for drag-drop
+  
+  // Metadata
+  priority    TaskPriority @default(MEDIUM)
+  status      TaskStatus   @default(TODO)
+  dueDate     DateTime?
+  startDate   DateTime?
+  estimatedHours Float?
+  actualHours    Float?
+  
+  // Creator
+  createdById String
+  createdBy   User         @relation("TaskCreator", fields: [createdById], references: [id])
+  
+  // Timestamps
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  completedAt DateTime?
+  
+  // Relations
+  assignees   TaskAssignee[]
+  comments    TaskComment[]
+  checklists  TaskChecklist[]
+  reviews     Review[]
+  feedback    Feedback[]
+  githubLinks GitHubLink[]
+  
+  @@unique([projectId, key])
+  @@index([projectId])
+  @@index([columnId])
+  @@index([createdById])
+  @@index([status])
+  @@index([dueDate])
+  @@map("tasks")
+}
+
+model TaskAssignee {
+  id        String   @id @default(uuid())
+  taskId    String
+  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  assignedAt DateTime @default(now())
+  
+  @@unique([taskId, userId])
+  @@index([taskId])
+  @@index([userId])
+  @@map("task_assignees")
+}
+
+model TaskComment {
+  id        String   @id @default(uuid())
+  content   String   @db.Text
+  taskId    String
+  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  authorId  String
+  author    User     @relation(fields: [authorId], references: [id])
+  
+  // Threading
+  parentId  String?
+  parent    TaskComment? @relation("CommentThread", fields: [parentId], references: [id], onDelete: Cascade)
+  replies   TaskComment[] @relation("CommentThread")
+  
+  // Timestamps
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  @@index([taskId])
+  @@index([authorId])
+  @@index([parentId])
+  @@map("task_comments")
+}
+
+model TaskChecklist {
+  id        String   @id @default(uuid())
+  title     String
+  isCompleted Boolean @default(false)
+  position  Int      // For ordering
+  taskId    String
+  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  
+  // Timestamps
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  completedAt DateTime?
+  
+  @@index([taskId])
+  @@map("task_checklists")
+}
+
+// ============================================
+// CALENDAR & MEETINGS
+// ============================================
+
+enum CalendarEventType {
+  TASK_DEADLINE
+  MEETING
+  MILESTONE
+  PERSONAL
+}
+
+model CalendarEvent {
+  id          String            @id @default(uuid())
+  title       String
+  description String?           @db.Text
+  type        CalendarEventType
+  
+  // Timing
+  startTime   DateTime
+  endTime     DateTime
+  isAllDay    Boolean           @default(false)
+  timezone    String?
+  
+  // Workspace
+  workspaceId String
+  workspace   Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  
+  // Creator
+  createdById String
+  createdBy   User              @relation(fields: [createdById], references: [id])
+  
+  // External sync
+  googleEventId  String?        @unique
+  outlookEventId String?        @unique
+  
+  // Timestamps
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+  
+  // Relations
+  meeting     Meeting?
+  
+  @@index([workspaceId])
+  @@index([createdById])
+  @@index([startTime])
+  @@map("calendar_events")
+}
+
+model Meeting {
+  id              String        @id @default(uuid())
+  calendarEventId String        @unique
+  calendarEvent   CalendarEvent @relation(fields: [calendarEventId], references: [id], onDelete: Cascade)
+  
+  // Meeting details
+  meetingUrl      String?       // Video call URL
+  location        String?
+  agenda          String?       @db.Text
+  notes           String?       @db.Text
+  
+  // Attendees (stored as JSON array of user IDs)
+  attendeeIds     String[]
+  
+  // Recording
+  recordingUrl    String?
+  
+  // Timestamps
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  
+  @@index([calendarEventId])
+  @@map("meetings")
+}
+
+// ============================================
+// REPORTS & ANALYTICS
+// ============================================
+
+enum ReportType {
+  WEEKLY
+  MONTHLY
+  CUSTOM
+}
+
+model Report {
+  id          String     @id @default(uuid())
+  title       String
+  type        ReportType
+  
+  // Project
+  projectId   String
+  project     Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  
+  // Date range
+  startDate   DateTime
+  endDate     DateTime
+  
+  // Generated data (stored as JSON)
+  data        Json       // Contains metrics, charts data, etc.
+  
+  // Files
+  pdfUrl      String?    // S3/storage URL for PDF
+  
+  // Stakeholders (user IDs who receive this report)
+  stakeholderIds String[]
+  
+  // Status
+  isGenerated Boolean    @default(false)
+  generatedAt DateTime?
+  
+  // Timestamps
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+  
+  @@index([projectId])
+  @@index([startDate, endDate])
+  @@map("reports")
+}
+
+// ============================================
+// INTEGRATIONS
+// ============================================
+
+model GitHubIntegration {
+  id              String   @id @default(uuid())
+  projectId       String
+  project         Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  
+  // GitHub details
+  githubRepoOwner String
+  githubRepoName  String
+  installationId  String?  // GitHub App installation ID
+  accessToken     String?  // Encrypted
+  
+  // Settings
+  autoUpdateStatus Boolean @default(true)
+  
+  // Timestamps
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  // Relations
+  githubLinks     GitHubLink[]
+  
+  @@unique([projectId, githubRepoOwner, githubRepoName])
+  @@index([projectId])
+  @@map("github_integrations")
+}
+
+enum GitHubLinkType {
+  PULL_REQUEST
+  ISSUE
+}
+
+model GitHubLink {
+  id            String             @id @default(uuid())
+  taskId        String
+  task          Task               @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  integrationId String
+  integration   GitHubIntegration  @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+  
+  // GitHub resource
+  type          GitHubLinkType
+  githubNumber  Int                // PR or Issue number
+  githubUrl     String
+  
+  // Status
+  isMerged      Boolean?           // For PRs
+  isClosed      Boolean            @default(false)
+  
+  // Timestamps
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+  
+  @@unique([taskId, integrationId, githubNumber])
+  @@index([taskId])
+  @@index([integrationId])
+  @@map("github_links")
+}
+
+// ============================================
+// REVIEWS & FEEDBACK
+// ============================================
+
+enum ReviewStatus {
+  PENDING
+  APPROVED
+  CHANGES_REQUESTED
+}
+
+model Review {
+  id          String       @id @default(uuid())
+  taskId      String
+  task        Task         @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  reviewerId  String
+  reviewer    User         @relation(fields: [reviewerId], references: [id])
+  
+  // Review details
+  status      ReviewStatus @default(PENDING)
+  comment     String?      @db.Text
+  
+  // Timestamps
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  reviewedAt  DateTime?
+  
+  @@index([taskId])
+  @@index([reviewerId])
+  @@index([status])
+  @@map("reviews")
+}
+
+model Feedback {
+  id          String   @id @default(uuid())
+  taskId      String
+  task        Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  
+  // Mentor (author)
+  mentorId    String
+  mentor      User     @relation("FeedbackAuthor", fields: [mentorId], references: [id])
+  
+  // Recipient (assignee)
+  recipientId String
+  recipient   User     @relation("FeedbackRecipient", fields: [recipientId], references: [id])
+  
+  // Feedback content
+  content     String   @db.Text
+  isRead      Boolean  @default(false)
+  
+  // Timestamps
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  @@index([taskId])
+  @@index([mentorId])
+  @@index([recipientId])
+  @@map("feedback")
+}
+
+// ============================================
+// NOTIFICATIONS
+// ============================================
+
+enum NotificationType {
+  TASK_ASSIGNED
+  TASK_COMMENT
+  TASK_DUE_SOON
+  REVIEW_REQUESTED
+  REVIEW_COMPLETED
+  FEEDBACK_RECEIVED
+  MEETING_REMINDER
+  PROJECT_INVITE
+  WORKSPACE_INVITE
+}
+
+model Notification {
+  id        String           @id @default(uuid())
+  userId    String
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  // Notification details
+  type      NotificationType
+  title     String
+  message   String
+  
+  // Link
+  link      String?          // URL to navigate to
+  
+  // Status
+  isRead    Boolean          @default(false)
+  
+  // Metadata (stored as JSON)
+  metadata  Json?
+  
+  // Timestamps
+  createdAt DateTime         @default(now())
+  readAt    DateTime?
+  
+  @@index([userId])
+  @@index([isRead])
+  @@index([createdAt])
+  @@map("notifications")
+}
