@@ -3,7 +3,6 @@ import { ConfigModule } from '@nestjs/config';
 import { ScheduleModule } from '@nestjs/schedule';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { PrismaModule } from './common/prisma/prisma.module';
-import { RedisModule } from './common/redis/redis.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { UsersModule } from './modules/users/users.module';
 import { WorkspacesModule } from './modules/workspaces/workspaces.module';
@@ -16,6 +15,7 @@ import { ReviewsModule } from './modules/reviews/reviews.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { WebsocketModule } from './modules/websocket/websocket.module';
 import { HealthController } from './health.controller';
+import { AppController } from './app.controller';
 
 @Module({
   imports: [
@@ -38,7 +38,6 @@ import { HealthController } from './health.controller';
 
     // Common modules
     PrismaModule,
-    RedisModule,
 
     // Feature modules
     AuthModule,
@@ -53,6 +52,6 @@ import { HealthController } from './health.controller';
     NotificationsModule,
     WebsocketModule,
   ],
-  controllers: [HealthController],
+  controllers: [AppController, HealthController],
 })
 export class AppModule {}

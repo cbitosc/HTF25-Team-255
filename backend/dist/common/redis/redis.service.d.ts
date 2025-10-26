@@ -1,0 +1,30 @@
+import { OnModuleDestroy } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import Redis from 'ioredis';
+export declare class RedisService implements OnModuleDestroy {
+    private configService;
+    private readonly logger;
+    private readonly client;
+    private readonly subscriber;
+    private readonly publisher;
+    constructor(configService: ConfigService);
+    onModuleDestroy(): Promise<void>;
+    get(key: string): Promise<string | null>;
+    set(key: string, value: string, ttl?: number): Promise<void>;
+    del(key: string): Promise<void>;
+    exists(key: string): Promise<boolean>;
+    ping(): Promise<string>;
+    cacheGet<T>(key: string): Promise<T | null>;
+    cacheSet<T>(key: string, value: T, ttl?: number): Promise<void>;
+    cacheDel(key: string): Promise<void>;
+    publish(channel: string, message: string): Promise<void>;
+    subscribe(channel: string, handler: (message: string) => void): Promise<void>;
+    unsubscribe(channel: string): Promise<void>;
+    checkRateLimit(key: string, limit: number, window: number): Promise<boolean>;
+    setSession(sessionId: string, data: any, ttl: number): Promise<void>;
+    getSession(sessionId: string): Promise<any>;
+    deleteSession(sessionId: string): Promise<void>;
+    getClient(): Redis;
+    getSubscriber(): Redis;
+    getPublisher(): Redis;
+}
